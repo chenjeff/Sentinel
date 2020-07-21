@@ -17,6 +17,7 @@ package com.alibaba.csp.sentinel.adapter.dubbo;
 
 import com.alibaba.csp.sentinel.Entry;
 import com.alibaba.csp.sentinel.EntryType;
+import com.alibaba.csp.sentinel.ResourceTypeConstants;
 import com.alibaba.csp.sentinel.SphU;
 import com.alibaba.csp.sentinel.Tracer;
 import com.alibaba.csp.sentinel.adapter.dubbo.config.DubboConfig;
@@ -31,6 +32,8 @@ import org.apache.dubbo.rpc.Invoker;
 import org.apache.dubbo.rpc.Result;
 import org.apache.dubbo.rpc.RpcException;
 
+import static org.apache.dubbo.common.constants.CommonConstants.PROVIDER;
+
 /**
  * <p>Apache Dubbo service provider filter that enables integration with Sentinel. Auto activated by default.</p>
  * <p>Note: this only works for Apache Dubbo 2.7.x or above version.</p>
@@ -43,35 +46,41 @@ import org.apache.dubbo.rpc.RpcException;
  * @author Carpenter Lee
  * @author Eric Zhao
  */
-@Activate(group = "provider")
-public class SentinelDubboProviderFilter implements Filter {
+@Activate(group = PROVIDER)
+public class SentinelDubboProviderFilter extends BaseSentinelDubboFilter {
 
     public SentinelDubboProviderFilter() {
         RecordLog.info("Sentinel Apache Dubbo provider filter initialized");
     }
 
     @Override
+    String getMethodName(Invoker invoker, Invocation invocation) {
+        return DubboUtils.getResourceName(invoker, invocation, DubboConfig.getDubboProviderPrefix());
+    }
+
+    @Override
+    String getInterfaceName(Invoker invoker) {
+        return DubboUtils.getInterfaceName(invoker);
+    }
+
+    @Override
     public Result invoke(Invoker<?> invoker, Invocation invocation) throws RpcException {
         // Get origin caller.
         String application = DubboUtils.getApplication(invocation, "");
-
         Entry interfaceEntry = null;
         Entry methodEntry = null;
+        String methodResourceName = getMethodName(invoker, invocation);
+        String interfaceResourceName = getInterfaceName(invoker);
         try {
-            String resourceName = DubboUtils.getResourceName(invoker, invocation, DubboConfig.getDubboProviderPrefix());
-            String interfaceName = invoker.getInterface().getName();
             // Only need to create entrance context at provider side, as context will take effect
             // at entrance of invocation chain only (for inbound traffic).
-            ContextUtil.enter(resourceName, application);
-            interfaceEntry = SphU.entry(interfaceName, EntryType.IN);
-            methodEntry = SphU.entry(resourceName, EntryType.IN, 1, invocation.getArguments());
-
+            ContextUtil.enter(methodResourceName, application);
+            interfaceEntry = SphU.entry(interfaceResourceName, ResourceTypeConstants.COMMON_RPC, EntryType.IN);
+            methodEntry = SphU.entry(methodResourceName, ResourceTypeConstants.COMMON_RPC, EntryType.IN, invocation.getArguments());
             Result result = invoker.invoke(invocation);
             if (result.hasException()) {
-                Throwable e = result.getException();
-                // Record common exception.
-                Tracer.traceEntry(e, interfaceEntry);
-                Tracer.traceEntry(e, methodEntry);
+                Tracer.traceEntry(result.getException(), interfaceEntry);
+                Tracer.traceEntry(result.getException(), methodEntry);
             }
             return result;
         } catch (BlockException e) {
@@ -90,4 +99,7 @@ public class SentinelDubboProviderFilter implements Filter {
             ContextUtil.exit();
         }
     }
+
+
 }
+
